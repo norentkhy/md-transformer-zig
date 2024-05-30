@@ -35,7 +35,8 @@ const MarkdownTokensIterator = struct {
     /// Returns the next token or null when no next token
     pub fn next(self: *Self) ?TokenResult {
         if (self.index == self.buffer.len) return null;
-        std.debug.print("index: {any}; buffer_len: {any}\n", .{ self.index, self.buffer.len });
+
+        std.debug.print("index: {?}; buffer_len: {?}\n", .{ self.index, self.buffer.len });
         const token_start = TokenStart.find(self.last_token, self.buffer, self.index) catch |err| switch (err) {
             error.EndOfBuffer => return null,
             // else => return TokenResult{ .err = err },
@@ -43,9 +44,16 @@ const MarkdownTokensIterator = struct {
         const token_end = TokenEnd.find(token_start.tag, self.buffer, token_start.index) catch |err| {
             return TokenResult{ .err = err };
         };
-        std.debug.print("tag: {any}\ncontent: \"{s}\"\n", .{ token_start.tag, token_end.content });
-        const next_index = token_end.index + 1;
-        self.index = if (next_index < self.buffer.len) next_index else token_end.index;
+
+        if (token_start.tag == .paragraph_end) {
+            std.debug.print("tag: {?}\n", .{token_start.tag});
+        } else {
+            std.debug.print("tag: {?}\ncontent[{?}]: \"{s}\"\n", .{ token_start.tag, token_end.content.?.len, token_end.content.? });
+        }
+        // const next_index = token_end.index + 1;
+        // self.index = if (next_index < self.buffer.len) next_index else token_end.index;
+        self.index = token_end.index + 1;
+        std.debug.print("new index: {?}\n", .{self.index});
         self.last_token = token_start.tag;
         return TokenResult{ .token = createToken(token_start.tag, token_end.content) };
     }
@@ -57,7 +65,7 @@ const TokenStart = struct {
 
     fn find(last_token: TokenTag, buffer: Buffer, index: BufferIndex) !TokenStart {
         switch (last_token) {
-            .init => {
+            .init, .paragraph_end => {
                 var start = index;
                 return while (start < buffer.len) {
                     switch (buffer[start]) {
@@ -70,7 +78,8 @@ const TokenStart = struct {
                 var start = index;
                 return while (start < buffer.len) {
                     switch (buffer[start]) {
-                        '\n', '\t', ' ' => start += 1,
+                        '\t', ' ' => start += 1,
+                        '\n' => break TokenStart{ .tag = .paragraph_end, .index = start },
                         else => break TokenStart{ .tag = .paragraph_part, .index = start },
                     }
                 } else error.EndOfBuffer;
@@ -81,7 +90,7 @@ const TokenStart = struct {
 };
 
 const TokenEnd = struct {
-    content: Buffer,
+    content: ?Buffer,
     index: BufferIndex,
 
     fn find(current_token: TokenTag, buffer: Buffer, start: BufferIndex) !TokenEnd {
@@ -100,14 +109,24 @@ const TokenEnd = struct {
                     }
                 } else TokenEnd{ .content = buffer[start..end], .index = end };
             },
+            .paragraph_end => {
+                var end = start;
+                return while (end < buffer.len) {
+                    switch (buffer[end]) {
+                        '\n', '\t', ' ' => end += 1,
+                        else => break TokenEnd{ .content = null, .index = end - 1 },
+                    }
+                } else TokenEnd{ .content = buffer[start..end], .index = end };
+            },
             else => unreachable,
         }
     }
 };
 
-fn createToken(tag: TokenTag, content: Buffer) Token {
+fn createToken(tag: TokenTag, content: ?Buffer) Token {
     return switch (tag) {
-        .paragraph_part => Token{ .paragraph_part = content },
+        .paragraph_part => Token{ .paragraph_part = content.? },
+        .paragraph_end => Token.paragraph_end,
         else => unreachable,
     };
 }
@@ -138,7 +157,7 @@ test "one paragraph, one line" {
     const receivedTokens = try tokens.toOwnedSlice();
     defer std.testing.allocator.free(receivedTokens);
 
-    const expectedTokens = [_]Token{(Token{ .paragraph_part = content })};
+    const expectedTokens = [_]Token{Token{ .paragraph_part = content }};
     try std.testing.expectEqualDeep(&expectedTokens, receivedTokens);
 }
 
@@ -153,7 +172,7 @@ test "one paragraph, two lines" {
     const receivedTokens = try tokens.toOwnedSlice();
     defer std.testing.allocator.free(receivedTokens);
 
-    const expectedTokens = [_]Token{ (Token{ .paragraph_part = line1 }), (Token{ .paragraph_part = line2 }) };
+    const expectedTokens = [_]Token{ Token{ .paragraph_part = line1 }, Token{ .paragraph_part = line2 } };
     try std.testing.expectEqualDeep(&expectedTokens, receivedTokens);
 }
 
@@ -168,6 +187,21 @@ test "one paragraph, two lines with padding" {
     const receivedTokens = try tokens.toOwnedSlice();
     defer std.testing.allocator.free(receivedTokens);
 
-    const expectedTokens = [_]Token{ (Token{ .paragraph_part = line1 }), (Token{ .paragraph_part = line2 }) };
+    const expectedTokens = [_]Token{ Token{ .paragraph_part = line1 }, Token{ .paragraph_part = line2 } };
+    try std.testing.expectEqualDeep(&expectedTokens, receivedTokens);
+}
+
+test "two paragraphs with padding" {
+    var tokens = std.ArrayList(Token).init(std.testing.allocator);
+    defer tokens.deinit();
+
+    const line1 = "first paragraph";
+    const line2 = "second paragraph";
+
+    try parse(&tokens, line1 ++ " \n \n  " ++ line2);
+    const receivedTokens = try tokens.toOwnedSlice();
+    defer std.testing.allocator.free(receivedTokens);
+
+    const expectedTokens = [_]Token{ Token{ .paragraph_part = line1 }, Token.paragraph_end, Token{ .paragraph_part = line2 } };
     try std.testing.expectEqualDeep(&expectedTokens, receivedTokens);
 }

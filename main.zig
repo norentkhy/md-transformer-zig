@@ -23,15 +23,6 @@ const TokenTag = enum {
 
 const ParseError = error{IncompleteToken};
 
-fn Result(comptime T: type, comptime E: type) type {
-    return union(ResultTag) {
-        ok: T,
-        err: E,
-    };
-}
-
-const ResultTag = enum { ok, err };
-
 const MarkdownTokensIterator = struct {
     buffer: Buffer,
     index: BufferIndex,
@@ -52,7 +43,7 @@ const MarkdownTokensIterator = struct {
         const token_end = TokenEnd.find(token_start.tag, self.buffer, token_start.index) catch |err| {
             return TokenResult{ .err = err };
         };
-        std.debug.print("tag: {any}\ncontent: {s}\n", .{ token_start.tag, token_end.content });
+        std.debug.print("tag: {any}\ncontent: \"{s}\"\n", .{ token_start.tag, token_end.content });
         const next_index = token_end.index + 1;
         self.index = if (next_index < self.buffer.len) next_index else token_end.index;
         self.last_token = token_start.tag;
@@ -97,11 +88,14 @@ const TokenEnd = struct {
         switch (current_token) {
             .paragraph_part => {
                 var end = start;
+                var content_end = end;
                 return while (end < buffer.len) {
                     switch (buffer[end]) {
-                        '\n' => break TokenEnd{ .content = buffer[start..end], .index = end },
+                        '\n' => break TokenEnd{ .content = buffer[start..content_end], .index = end },
+                        '\t', ' ' => end += 1,
                         else => {
                             end += 1;
+                            content_end = end;
                         },
                     }
                 } else TokenEnd{ .content = buffer[start..end], .index = end };
@@ -170,7 +164,7 @@ test "one paragraph, two lines with padding" {
     const line1 = "first line";
     const line2 = "second line";
 
-    try parse(&tokens, line1 ++ "\n  " ++ line2);
+    try parse(&tokens, line1 ++ "  \n  " ++ line2);
     const receivedTokens = try tokens.toOwnedSlice();
     defer std.testing.allocator.free(receivedTokens);
 

@@ -117,13 +117,25 @@ const TokenEnd = struct {
                 } else TokenEnd{ .content = buffer[start..end], .index = end };
             },
             .header => {
-                var end = start;
+                var start_content = start;
+                while (start_content < buffer.len) {
+                    switch (buffer[start_content]) {
+                        '\t', ' ' => start_content += 1,
+                        else => break,
+                    }
+                }
+                var end = start_content;
+                var end_content = end;
                 return while (end < buffer.len) {
                     switch (buffer[end]) {
-                        '\n' => break TokenEnd{ .content = buffer[start..end], .index = end },
-                        else => end += 1,
+                        '\n' => break TokenEnd{ .content = buffer[start_content..end_content], .index = end },
+                        '\t', ' ' => end += 1,
+                        else => {
+                            end += 1;
+                            end_content = end;
+                        },
                     }
-                } else TokenEnd{ .content = buffer[start..end], .index = end };
+                } else TokenEnd{ .content = buffer[start_content..end_content], .index = end };
             },
             else => unreachable,
         }
@@ -221,6 +233,20 @@ test "one header" {
     const content = "this is a header";
 
     try parse(&tokens, "#" ++ content);
+    const receivedTokens = try tokens.toOwnedSlice();
+    defer std.testing.allocator.free(receivedTokens);
+
+    const expectedTokens = [_]Token{Token{ .header = content }};
+    try std.testing.expectEqualDeep(&expectedTokens, receivedTokens);
+}
+
+test "one header with padding" {
+    var tokens = std.ArrayList(Token).init(std.testing.allocator);
+    defer tokens.deinit();
+
+    const content = "this is a header with multiple  spaces sometimes hehe";
+
+    try parse(&tokens, "# \t" ++ content ++ "  ");
     const receivedTokens = try tokens.toOwnedSlice();
     defer std.testing.allocator.free(receivedTokens);
 

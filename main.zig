@@ -79,6 +79,7 @@ const TokenStart = struct {
                     switch (buffer[start]) {
                         '\t', ' ' => start += 1,
                         '\n' => break TokenStart{ .tag = .paragraph_end, .index = start },
+                        '#' => break TokenStart{ .tag = .header, .index = start + 1 },
                         else => break TokenStart{ .tag = .paragraph_part, .index = start },
                     }
                 } else error.EndOfBuffer;
@@ -232,6 +233,20 @@ test "one header with padding" {
 }
 
 test "one header, surrounded by a paragraph" {
+    var token_list = std.ArrayList(Token).init(std.testing.allocator);
+    defer token_list.deinit();
+
+    const pre_header_content = "pre-header stuff";
+    const header_content = "this is a header with multiple  spaces sometimes hehe";
+    const post_header_content = "paragraph part of header";
+    try parse(&token_list, pre_header_content ++ "\n" ++ "# " ++ header_content ++ "\n" ++ post_header_content);
+    try expectEqualTokens(token_list, &[_]Token{
+        Token{ .paragraph_part = pre_header_content },  Token{ .header = header_content },
+        Token{ .paragraph_part = post_header_content },
+    });
+}
+
+test "one header, surrounded by a paragraph with all kinds of padding" {
     var token_list = std.ArrayList(Token).init(std.testing.allocator);
     defer token_list.deinit();
 

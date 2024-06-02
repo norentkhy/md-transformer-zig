@@ -50,8 +50,6 @@ const MarkdownTokensIterator = struct {
         } else {
             std.debug.print("tag: {?}\ncontent[{?}]: \"{s}\"\n", .{ token_start.tag, token_end.content.?.len, token_end.content.? });
         }
-        // const next_index = token_end.index + 1;
-        // self.index = if (next_index < self.buffer.len) next_index else token_end.index;
         self.index = token_end.index + 1;
         std.debug.print("new index: {?}\n", .{self.index});
         self.last_token = token_start.tag;
@@ -65,11 +63,12 @@ const TokenStart = struct {
 
     fn find(last_token: TokenTag, buffer: Buffer, index: BufferIndex) !TokenStart {
         switch (last_token) {
-            .init, .paragraph_end => {
+            .init, .paragraph_end, .header => {
                 var start = index;
                 return while (start < buffer.len) {
                     switch (buffer[start]) {
                         '\n', '\t', ' ' => start += 1,
+                        '#' => break TokenStart{ .tag = .header, .index = start + 1 },
                         else => break TokenStart{ .tag = .paragraph_part, .index = start },
                     }
                 } else error.EndOfBuffer;
@@ -84,7 +83,6 @@ const TokenStart = struct {
                     }
                 } else error.EndOfBuffer;
             },
-            else => unreachable,
         }
     }
 };
@@ -118,6 +116,15 @@ const TokenEnd = struct {
                     }
                 } else TokenEnd{ .content = buffer[start..end], .index = end };
             },
+            .header => {
+                var end = start;
+                return while (end < buffer.len) {
+                    switch (buffer[end]) {
+                        '\n' => break TokenEnd{ .content = buffer[start..end], .index = end },
+                        else => end += 1,
+                    }
+                } else TokenEnd{ .content = buffer[start..end], .index = end };
+            },
             else => unreachable,
         }
     }
@@ -127,6 +134,7 @@ fn createToken(tag: TokenTag, content: ?Buffer) Token {
     return switch (tag) {
         .paragraph_part => Token{ .paragraph_part = content.? },
         .paragraph_end => Token.paragraph_end,
+        .header => Token{ .header = content.? },
         else => unreachable,
     };
 }
@@ -203,5 +211,19 @@ test "two paragraphs with padding" {
     defer std.testing.allocator.free(receivedTokens);
 
     const expectedTokens = [_]Token{ Token{ .paragraph_part = line1 }, Token.paragraph_end, Token{ .paragraph_part = line2 } };
+    try std.testing.expectEqualDeep(&expectedTokens, receivedTokens);
+}
+
+test "one header" {
+    var tokens = std.ArrayList(Token).init(std.testing.allocator);
+    defer tokens.deinit();
+
+    const content = "this is a header";
+
+    try parse(&tokens, "#" ++ content);
+    const receivedTokens = try tokens.toOwnedSlice();
+    defer std.testing.allocator.free(receivedTokens);
+
+    const expectedTokens = [_]Token{Token{ .header = content }};
     try std.testing.expectEqualDeep(&expectedTokens, receivedTokens);
 }

@@ -151,7 +151,7 @@ fn createToken(tag: TokenTag, content: ?Buffer) Token {
     };
 }
 
-fn parse(tokens: *std.ArrayList(Token), buffer: []const u8) !void {
+fn parse(token_list: *std.ArrayList(Token), buffer: []const u8) !void {
     var it = MarkdownTokensIterator{
         .buffer = buffer,
         .index = 0,
@@ -161,7 +161,7 @@ fn parse(tokens: *std.ArrayList(Token), buffer: []const u8) !void {
     while (it.next()) |token_result| {
         std.debug.print("-" ** 80 ++ "\n", .{});
         switch (token_result) {
-            .token => |token| try tokens.append(token),
+            .token => |token| try token_list.append(token),
             .err => |err| return err,
         }
     }
@@ -169,107 +169,82 @@ fn parse(tokens: *std.ArrayList(Token), buffer: []const u8) !void {
 }
 
 test "one paragraph, one line" {
-    var tokens = std.ArrayList(Token).init(std.testing.allocator);
-    defer tokens.deinit();
+    var token_list = std.ArrayList(Token).init(std.testing.allocator);
+    defer token_list.deinit();
 
     const content = "this is some text";
-
-    try parse(&tokens, content);
-    const receivedTokens = try tokens.toOwnedSlice();
-    defer std.testing.allocator.free(receivedTokens);
-
-    const expectedTokens = [_]Token{Token{ .paragraph_part = content }};
-    try std.testing.expectEqualDeep(&expectedTokens, receivedTokens);
+    try parse(&token_list, content);
+    try expectEqualTokens(token_list, &[_]Token{Token{ .paragraph_part = content }});
 }
 
 test "one paragraph, two lines" {
-    var tokens = std.ArrayList(Token).init(std.testing.allocator);
-    defer tokens.deinit();
+    var token_list = std.ArrayList(Token).init(std.testing.allocator);
+    defer token_list.deinit();
 
     const line1 = "first line";
     const line2 = "second line";
-
-    try parse(&tokens, line1 ++ "\n" ++ line2);
-    const receivedTokens = try tokens.toOwnedSlice();
-    defer std.testing.allocator.free(receivedTokens);
-
-    const expectedTokens = [_]Token{ Token{ .paragraph_part = line1 }, Token{ .paragraph_part = line2 } };
-    try std.testing.expectEqualDeep(&expectedTokens, receivedTokens);
+    try parse(&token_list, line1 ++ "\n" ++ line2);
+    try expectEqualTokens(token_list, &[_]Token{
+        Token{ .paragraph_part = line1 }, Token{ .paragraph_part = line2 },
+    });
 }
 
 test "one paragraph, two lines with padding" {
-    var tokens = std.ArrayList(Token).init(std.testing.allocator);
-    defer tokens.deinit();
+    var token_list = std.ArrayList(Token).init(std.testing.allocator);
+    defer token_list.deinit();
 
     const line1 = "first line";
     const line2 = "second line";
-
-    try parse(&tokens, line1 ++ "  \n  " ++ line2);
-    const receivedTokens = try tokens.toOwnedSlice();
-    defer std.testing.allocator.free(receivedTokens);
-
-    const expectedTokens = [_]Token{ Token{ .paragraph_part = line1 }, Token{ .paragraph_part = line2 } };
-    try std.testing.expectEqualDeep(&expectedTokens, receivedTokens);
+    try parse(&token_list, line1 ++ "  \n  " ++ line2);
+    try expectEqualTokens(token_list, &[_]Token{
+        Token{ .paragraph_part = line1 }, Token{ .paragraph_part = line2 },
+    });
 }
 
 test "two paragraphs with padding" {
-    var tokens = std.ArrayList(Token).init(std.testing.allocator);
-    defer tokens.deinit();
+    var token_list = std.ArrayList(Token).init(std.testing.allocator);
+    defer token_list.deinit();
 
     const line1 = "first paragraph";
     const line2 = "second paragraph";
-
-    try parse(&tokens, line1 ++ " \n \n  " ++ line2);
-    const receivedTokens = try tokens.toOwnedSlice();
-    defer std.testing.allocator.free(receivedTokens);
-
-    const expectedTokens = [_]Token{ Token{ .paragraph_part = line1 }, Token.paragraph_end, Token{ .paragraph_part = line2 } };
-    try std.testing.expectEqualDeep(&expectedTokens, receivedTokens);
+    try parse(&token_list, line1 ++ " \n \n  " ++ line2);
+    try expectEqualTokens(token_list, &[_]Token{
+        Token{ .paragraph_part = line1 }, Token.paragraph_end, Token{ .paragraph_part = line2 },
+    });
 }
 
 test "one header" {
-    var tokens = std.ArrayList(Token).init(std.testing.allocator);
-    defer tokens.deinit();
+    var token_list = std.ArrayList(Token).init(std.testing.allocator);
+    defer token_list.deinit();
 
     const content = "this is a header";
-
-    try parse(&tokens, "#" ++ content);
-    const receivedTokens = try tokens.toOwnedSlice();
-    defer std.testing.allocator.free(receivedTokens);
-
-    const expectedTokens = [_]Token{Token{ .header = content }};
-    try std.testing.expectEqualDeep(&expectedTokens, receivedTokens);
+    try parse(&token_list, "#" ++ content);
+    try expectEqualTokens(token_list, &[_]Token{Token{ .header = content }});
 }
 
 test "one header with padding" {
-    var tokens = std.ArrayList(Token).init(std.testing.allocator);
-    defer tokens.deinit();
+    var token_list = std.ArrayList(Token).init(std.testing.allocator);
+    defer token_list.deinit();
 
     const content = "this is a header with multiple  spaces sometimes hehe";
-
-    try parse(&tokens, "# \t" ++ content ++ "  ");
-    const receivedTokens = try tokens.toOwnedSlice();
-    defer std.testing.allocator.free(receivedTokens);
-
-    const expectedTokens = [_]Token{Token{ .header = content }};
-    try std.testing.expectEqualDeep(&expectedTokens, receivedTokens);
+    try parse(&token_list, "# \t" ++ content ++ "  ");
+    try expectEqualTokens(token_list, &[_]Token{Token{ .header = content }});
 }
 
 test "one header, surrounded by a paragraph" {
-    var tokens = std.ArrayList(Token).init(std.testing.allocator);
-    defer tokens.deinit();
+    var token_list = std.ArrayList(Token).init(std.testing.allocator);
+    defer token_list.deinit();
 
     const pre_header_content = "pre-header stuff";
     const header_content = "this is a header with multiple  spaces sometimes hehe";
     const post_header_content = "paragraph part of header";
-
-    try parse(&tokens, pre_header_content ++ "\n \n" ++ "# " ++ header_content ++ " \n\t" ++ post_header_content);
-    const receivedTokens = try tokens.toOwnedSlice();
-    defer std.testing.allocator.free(receivedTokens);
-
-    const expectedTokens = [_]Token{
+    try parse(&token_list, pre_header_content ++ "\n \n" ++ "# " ++ header_content ++ " \n\t" ++ post_header_content);
+    try expectEqualTokens(token_list, &[_]Token{
         Token{ .paragraph_part = pre_header_content }, Token.paragraph_end,
         Token{ .header = header_content },             Token{ .paragraph_part = post_header_content },
-    };
-    try std.testing.expectEqualDeep(&expectedTokens, receivedTokens);
+    });
+}
+
+fn expectEqualTokens(token_list: std.ArrayList(Token), expected_tokens: []const Token) !void {
+    try std.testing.expectEqualDeep(expected_tokens, token_list.items);
 }

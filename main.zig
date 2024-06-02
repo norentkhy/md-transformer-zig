@@ -1,8 +1,6 @@
 const std = @import("std");
 
-pub fn main() !void {
-    std.debug.print("hihi", .{});
-}
+pub fn main() !void {}
 
 const Buffer = []const u8;
 const BufferIndex = usize;
@@ -12,6 +10,17 @@ const Token = union(TokenTag) {
     paragraph_part: []const u8,
     paragraph_end: void,
     header: []const u8,
+
+    fn debugInfo(self: Token, allocator: std.mem.Allocator) ![]const u8 {
+        const name = @tagName(self);
+        const content = switch (self) {
+            .paragraph_end => "",
+            .paragraph_part => |str| str,
+            .header => |str| str,
+            .init => "",
+        };
+        return std.fmt.allocPrint(allocator, "[{s}] {s}", .{ name, content });
+    }
 };
 
 const TokenTag = enum {
@@ -36,7 +45,6 @@ const MarkdownTokensIterator = struct {
     pub fn next(self: *Self) ?TokenResult {
         if (self.index == self.buffer.len) return null;
 
-        std.debug.print("index: {?}; buffer_len: {?}\n", .{ self.index, self.buffer.len });
         const token_start = TokenStart.find(self.last_token, self.buffer, self.index) catch |err| switch (err) {
             error.EndOfBuffer => return null,
             // else => return TokenResult{ .err = err },
@@ -45,13 +53,7 @@ const MarkdownTokensIterator = struct {
             return TokenResult{ .err = err };
         };
 
-        if (token_start.tag == .paragraph_end) {
-            std.debug.print("tag: {?}\n", .{token_start.tag});
-        } else {
-            std.debug.print("tag: {?}\ncontent[{?}]: \"{s}\"\n", .{ token_start.tag, token_end.content.?.len, token_end.content.? });
-        }
         self.index = token_end.index + 1;
-        std.debug.print("new index: {?}\n", .{self.index});
         self.last_token = token_start.tag;
         return TokenResult{ .token = createToken(token_start.tag, token_end.content) };
     }
@@ -158,15 +160,12 @@ fn parse(token_list: *std.ArrayList(Token), buffer: []const u8) !void {
         .index = 0,
         .last_token = .init,
     };
-    std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
     while (it.next()) |token_result| {
-        std.debug.print("-" ** 80 ++ "\n", .{});
         switch (token_result) {
             .token => |token| try token_list.append(token),
             .err => |err| return err,
         }
     }
-    std.debug.print("\n" ++ "_" ** 80 ++ "\n", .{});
 }
 
 test "one paragraph, one line" {
@@ -261,5 +260,19 @@ test "one header, surrounded by a paragraph with all kinds of padding" {
 }
 
 fn expectEqualTokens(token_list: std.ArrayList(Token), expected_tokens: []const Token) !void {
-    try std.testing.expectEqualDeep(expected_tokens, token_list.items);
+    std.testing.expectEqualDeep(expected_tokens, token_list.items) catch |err| {
+        std.debug.print("—" ** 80 ++ "\n", .{});
+        for (token_list.items, expected_tokens) |received, expected| {
+            const receivedInfo = try received.debugInfo(std.testing.allocator);
+            defer std.testing.allocator.free(receivedInfo);
+            const expectedInfo = try expected.debugInfo(std.testing.allocator);
+            defer std.testing.allocator.free(expectedInfo);
+            std.debug.print("received {s}\n", .{receivedInfo});
+            std.debug.print("expected {s}\n", .{expectedInfo});
+        }
+        std.debug.print("—" ** 80 ++ "\n", .{});
+        std.debug.print("{any}\n", .{err});
+        std.debug.print("—" ** 80 ++ "\n", .{});
+        return err;
+    };
 }

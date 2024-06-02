@@ -165,6 +165,7 @@ fn parse(tokens: *std.ArrayList(Token), buffer: []const u8) !void {
             .err => |err| return err,
         }
     }
+    std.debug.print("\n" ++ "_" ** 80 ++ "\n", .{});
 }
 
 test "one paragraph, one line" {
@@ -251,5 +252,24 @@ test "one header with padding" {
     defer std.testing.allocator.free(receivedTokens);
 
     const expectedTokens = [_]Token{Token{ .header = content }};
+    try std.testing.expectEqualDeep(&expectedTokens, receivedTokens);
+}
+
+test "one header, surrounded by a paragraph" {
+    var tokens = std.ArrayList(Token).init(std.testing.allocator);
+    defer tokens.deinit();
+
+    const pre_header_content = "pre-header stuff";
+    const header_content = "this is a header with multiple  spaces sometimes hehe";
+    const post_header_content = "paragraph part of header";
+
+    try parse(&tokens, pre_header_content ++ "\n \n" ++ "# " ++ header_content ++ " \n\t" ++ post_header_content);
+    const receivedTokens = try tokens.toOwnedSlice();
+    defer std.testing.allocator.free(receivedTokens);
+
+    const expectedTokens = [_]Token{
+        Token{ .paragraph_part = pre_header_content }, Token.paragraph_end,
+        Token{ .header = header_content },             Token{ .paragraph_part = post_header_content },
+    };
     try std.testing.expectEqualDeep(&expectedTokens, receivedTokens);
 }

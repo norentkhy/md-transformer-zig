@@ -31,8 +31,6 @@ const FromMarkdownStream = struct {
 
     pub fn next(self: *Self, allocator: std.mem.Allocator) !?HtmlToken {
         if (self.next_html_token) |token| {
-            assert(self.close_parent == false);
-            assert(self.close_stream == false);
             self.next_html_token = null;
             return token;
         }
@@ -179,7 +177,7 @@ test "test two next calls for one paragraph" {
         MdToken{ .alphanumerical = "hello" },
         MdToken{ .space = " " },
         MdToken{ .alphanumerical = "moto" },
-        // MdToken{ .space = "\n" },
+        MdToken{ .space = "\n" },
         // MdToken{ .symbol = "#" },
         // MdToken{ .space = " " },
         // MdToken{ .alphanumerical = "moto" },

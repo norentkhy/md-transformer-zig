@@ -1,6 +1,30 @@
 const std = @import("std");
 
-pub const TokenStream = struct {
+pub const TokenStream = union(TokenStreamTag) {
+    text: FromText,
+    tokens: FromTokens,
+
+    const Self = @This();
+
+    pub fn next(self: *Self) ?Token {
+        return switch (self.*) {
+            inline else => |*s| s.next(),
+        };
+    }
+
+    pub fn fromText(text: []const u8) Self {
+        var stream = Self{ .text = FromText{ .text = text } };
+        return &stream;
+    }
+
+    pub fn fromTokens(tokens: []const Token) Self {
+        return Self{ .tokens = FromTokens{ .tokens = tokens } };
+    }
+};
+
+const TokenStreamTag = enum { text, tokens };
+
+const FromText = struct {
     text: []const u8,
     idx: usize = 0,
 
@@ -24,7 +48,21 @@ pub const TokenStream = struct {
     }
 };
 
-const Token = union(TokenTag) {
+const FromTokens = struct {
+    tokens: []const Token,
+    idx: usize = 0,
+    const Self = @This();
+
+    fn next(self: *Self) ?Token {
+        if (self.idx >= self.tokens.len) return null;
+
+        const token = self.tokens[self.idx];
+        self.idx += 1;
+        return token;
+    }
+};
+
+pub const Token = union(TokenTag) {
     alphanumerical: []const u8,
     space: []const u8,
     symbol: []const u8,
@@ -37,18 +75,18 @@ const Token = union(TokenTag) {
         };
     }
 
-    fn debugInfo(self: Token) []const u8 {
+    pub fn debugInfo(self: Token) []const u8 {
         return switch (self) {
-            .alphanumerical => |c| c,
-            .space => |c| c,
-            .symbol => |c| c,
+            .alphanumerical => |content| content,
+            .space => |content| content,
+            .symbol => |content| content,
         };
     }
 };
 
 const TokenTag = enum { alphanumerical, space, symbol };
 
-test "TokenStream" {
+test "FromText" {
     const text =
         \\hello moto
         \\# moto moto
@@ -63,7 +101,7 @@ test "TokenStream" {
 
     var token_list = std.ArrayList(Token).init(std.testing.allocator);
     defer token_list.deinit();
-    var token_stream = TokenStream{ .text = text };
+    var token_stream = FromText{ .text = text };
     while (token_stream.next()) |token| {
         try token_list.append(token);
     }

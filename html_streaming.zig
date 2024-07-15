@@ -112,7 +112,7 @@ const HtmlFromMdStream = struct {
                 .symbol => |content| try text_buffer.appendSlice(content),
                 .space => |content| {
                     if (hasItemAtLeast(u8, content, '\n', 1)) break :parsing;
-                    try text_buffer.append(' ');
+                    if (text_buffer.items.len > 0) try text_buffer.append(' ');
                 },
             }
         }
@@ -197,7 +197,7 @@ test "test two next calls for one paragraph" {
         MdToken{ .alphanumerical = "moto" },
         MdToken{ .space = "\n" },
         MdToken{ .symbol = "#" },
-        // MdToken{ .space = " " },
+        MdToken{ .space = " " },
         // MdToken{ .alphanumerical = "moto" },
         // MdToken{ .space = " " },
         // MdToken{ .alphanumerical = "moto" },

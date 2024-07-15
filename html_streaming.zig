@@ -2,7 +2,6 @@ const std = @import("std");
 const print = std.debug.print;
 const assert = std.debug.assert;
 const MdToken = @import("./md_streaming.zig").Token;
-const MdTokenTag = @import("./md_streaming.zig").TokenTag;
 const MdTokenStream = @import("./md_streaming.zig").TokenStream;
 const FixedQueue = @import("./fixed_queue.zig").FixedQueue;
 
@@ -43,10 +42,16 @@ const HtmlFromMdStream = struct {
             switch (context) {
                 .paragraph => {
                     try self.parseParagraph(&text_buffer);
-                    print("paragraph: {s}\n", .{text_buffer.items});
-                    return HtmlToken{ .text_node = try toNewOwner(allocator, &text_buffer) };
+                },
+                .header1 => {
+                    _ = self.md_queue.take();
+                    try self.parseHeader(&text_buffer);
                 },
             }
+
+            if (text_buffer.items.len == 0) return self.html_queue.take();
+            print("text: {s}\n", .{text_buffer.items});
+            return HtmlToken{ .text_node = try toNewOwner(allocator, &text_buffer) };
         }
 
         return null;
@@ -73,43 +78,84 @@ const HtmlFromMdStream = struct {
                         if (char == '\n') new_line_count += 1;
                     }
 
-                    if (self.peekMdToken(0) == null or new_line_count > 1) {
-                        const context = self.context_stack.pop();
-                        self.html_queue.put(context.endTag());
-                        break :ingestion;
-                    }
+                    const md_token_peek0 = self.peekMdToken(0);
+                    const md_token_peek1 = self.peekMdToken(1);
+                    const header_peeked = header_peeked: {
+                        const peek0 = md_token_peek0 orelse break :header_peeked false;
+                        const is_header_symbol = Context.from(peek0) == .header1;
+                        const peek1 = md_token_peek1 orelse break :header_peeked is_header_symbol;
+                        break :header_peeked is_header_symbol and peek1 == .space;
+                    };
+                    if (header_peeked) break :ingestion;
+                    if (self.peekMdToken(0) == null) break :ingestion;
+                    if (new_line_count > 1) break :ingestion;
 
                     if (new_line_count == 1) {
                         self.html_queue.put(HtmlToken.line_break);
-                        break :ingestion;
+                        return;
                     }
 
                     try text_buffer.append(' ');
                     continue :ingestion;
                 },
 
-                .symbol => @panic("dem symbols"),
+                .symbol => @panic("time to handle symbols in paragraphs"),
 
                 .alphanumerical => |content| {
                     for (content) |char| try text_buffer.append(char);
                 },
             }
         }
+
+        const context = self.context_stack.pop();
+        self.html_queue.put(context.endTag());
+    }
+
+    fn parseHeader(self: *Self, text_buffer: *std.ArrayList(u8)) !void {
+        ingestion: while (self.nextMdToken()) |md_token| {
+            switch (md_token) {
+                .alphanumerical => |content| try text_buffer.appendSlice(content),
+                .symbol => |content| try text_buffer.appendSlice(content),
+                .space => |content| {
+                    for (content) |char| {
+                        if (char == '\n') break :ingestion;
+                    }
+
+                    try text_buffer.append(' ');
+                    continue :ingestion;
+                },
+            }
+        }
+
+        const context = self.context_stack.pop();
+        self.html_queue.put(context.endTag());
     }
 };
 
 const Context = union(ContextTag) {
     const Self = @This();
     paragraph: HtmlTagPair,
+    header1: HtmlTagPair,
 
     pub fn from(md_token: MdToken) Self {
-        return switch (md_token) {
-            .alphanumerical => Self{ .paragraph = HtmlTagPair{
+        switch (md_token) {
+            .alphanumerical => return Self{ .paragraph = HtmlTagPair{
                 .start_tag = HtmlToken.paragraph_start,
                 .end_tag = HtmlToken.paragraph_end,
             } },
+            .symbol => |content| {
+                var headerCount: u8 = 0;
+                for (content) |char| {
+                    if (char == '#') headerCount += 1;
+                }
+                if (headerCount == 1) return Self{ .header1 = HtmlTagPair{
+                    .start_tag = HtmlToken.header1_start,
+                    .end_tag = HtmlToken.header1_end,
+                } };
+            },
             else => unreachable,
-        };
+        }
+        unreachable;
     }
 
     pub fn startTag(self: Self) HtmlToken {
@@ -125,7 +171,7 @@ const Context = union(ContextTag) {
     }
 };
 
-const ContextTag = enum { paragraph };
+const ContextTag = enum { paragraph, header1 };
 
 fn toNewOwner(allocator: std.mem.Allocator, text_buffer: *std.ArrayList(u8)) !std.ArrayList(u8) {
     const slice = try text_buffer.toOwnedSlice();
@@ -138,6 +184,8 @@ const HtmlToken = union(HtmlTag) {
     line_break,
     paragraph_start,
     paragraph_end,
+    header1_start,
+    header1_end,
     text_node: std.ArrayList(u8),
 
     pub fn deinit(self: HtmlToken) void {
@@ -152,6 +200,8 @@ const HtmlTag = enum {
     line_break,
     paragraph_start,
     paragraph_end,
+    header1_start,
+    header1_end,
     text_node,
 };
 
@@ -162,7 +212,7 @@ test "test two next calls for one paragraph" {
         MdToken{ .space = " " },
         MdToken{ .alphanumerical = "moto" },
         MdToken{ .space = "\n" },
-        // MdToken{ .symbol = "#" },
+        MdToken{ .symbol = "#" },
         // MdToken{ .space = " " },
         // MdToken{ .alphanumerical = "moto" },
         // MdToken{ .space = " " },
@@ -214,11 +264,7 @@ test "test two next calls for one paragraph" {
     var parser = try HtmlFromMdStream.init(&md_token_stream, std.testing.allocator);
     defer parser.deinit();
 
-    var count: u8 = 0;
     while (try parser.next(std.testing.allocator)) |token| {
-        count += 1;
-        if (count > 8) break;
-
         defer token.deinit();
         print("parsed: {any}\n\n", .{token});
     }

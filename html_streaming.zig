@@ -53,7 +53,7 @@ const HtmlFromMdStream = struct {
             }
 
             if (text_buffer.items.len == 0) return self.html_queue.take();
-            print("text: {s}\n", .{text_buffer.items});
+            print("text: \"{s}\"\n", .{text_buffer.items});
             return HtmlToken{ .text_node = try toNewOwner(u8, allocator, &text_buffer) };
         }
 
@@ -112,6 +112,7 @@ const HtmlFromMdStream = struct {
                 .symbol => |content| try text_buffer.appendSlice(content),
                 .space => |content| {
                     if (hasItemAtLeast(u8, content, '\n', 1)) break :parsing;
+                    if (self.peekMdToken(0) == null) break :parsing;
                     if (text_buffer.items.len > 0) try text_buffer.append(' ');
                 },
             }
@@ -198,8 +199,8 @@ test "test two next calls for one paragraph" {
         MdToken{ .space = "\n" },
         MdToken{ .symbol = "#" },
         MdToken{ .space = " " },
-        // MdToken{ .alphanumerical = "moto" },
-        // MdToken{ .space = " " },
+        MdToken{ .alphanumerical = "moto" },
+        MdToken{ .space = " " },
         // MdToken{ .alphanumerical = "moto" },
         // MdToken{ .space = "\n" },
         // MdToken{ .alphanumerical = "moo" },

@@ -39,22 +39,16 @@ const HtmlFromMdStream = struct {
                 return context.startTag();
             }
 
-            var text_buffer = std.ArrayList(u8).init(allocator);
-            defer text_buffer.deinit();
-
             switch (context) {
                 .paragraph => {
-                    try self.parseParagraph(&text_buffer);
+                    try self.parseParagraph(allocator);
                 },
                 .header1 => {
                     _ = self.md_queue.take();
-                    try self.parseHeader(&text_buffer);
+                    try self.parseHeader(allocator);
                 },
             }
-
-            if (text_buffer.items.len == 0) return self.html_queue.take();
-            print("text: \"{s}\"\n", .{text_buffer.items});
-            return HtmlToken{ .text_node = try toNewOwner(u8, allocator, &text_buffer) };
+            return self.html_queue.take();
         }
 
         return null;
@@ -79,7 +73,11 @@ const HtmlFromMdStream = struct {
         return is_header_symbol and peek1 == .space;
     }
 
-    fn parseParagraph(self: *Self, text_buffer: *std.ArrayList(u8)) !void {
+    fn parseParagraph(self: *Self, allocator: std.mem.Allocator) !void {
+        var text_buffer = std.ArrayList(u8).init(allocator);
+        defer text_buffer.deinit();
+        var add_linebreak = false;
+
         parsing: while (self.nextMdToken()) |md_token| {
             switch (md_token) {
                 .alphanumerical => |content| try text_buffer.appendSlice(content),
@@ -91,8 +89,8 @@ const HtmlFromMdStream = struct {
                     if (new_line_count > 1) break :parsing;
 
                     if (new_line_count == 1) {
-                        self.html_queue.put(HtmlToken.line_break);
-                        return;
+                        add_linebreak = true;
+                        break :parsing;
                     }
 
                     try text_buffer.append(' ');
@@ -101,11 +99,19 @@ const HtmlFromMdStream = struct {
             }
         }
 
+        self.html_queue.put(.{ .text_node = try toNewOwner(u8, allocator, &text_buffer) });
+        if (add_linebreak) {
+            self.html_queue.put(HtmlToken.line_break);
+            return;
+        }
         const context = self.context_stack.pop();
         self.html_queue.put(context.endTag());
     }
 
-    fn parseHeader(self: *Self, text_buffer: *std.ArrayList(u8)) !void {
+    fn parseHeader(self: *Self, allocator: std.mem.Allocator) !void {
+        var text_buffer = std.ArrayList(u8).init(allocator);
+        defer text_buffer.deinit();
+
         parsing: while (self.nextMdToken()) |md_token| {
             switch (md_token) {
                 .alphanumerical => |content| try text_buffer.appendSlice(content),
@@ -118,6 +124,7 @@ const HtmlFromMdStream = struct {
             }
         }
 
+        self.html_queue.put(.{ .text_node = try toNewOwner(u8, allocator, &text_buffer) });
         const context = self.context_stack.pop();
         self.html_queue.put(context.endTag());
     }
@@ -177,6 +184,17 @@ const HtmlToken = union(HtmlTag) {
         return switch (self) {
             .text_node => |arrayList| arrayList.deinit(),
             else => {},
+        };
+    }
+
+    pub fn serialize(self: HtmlToken) []const u8 {
+        return switch (self) {
+            .line_break => "<br>",
+            .paragraph_start => "<p>",
+            .paragraph_end => "</p>",
+            .header1_start => "<h1>",
+            .header1_end => "</h1>",
+            .text_node => |text_buffer| text_buffer.items,
         };
     }
 };
@@ -251,6 +269,6 @@ test "test two next calls for one paragraph" {
 
     while (try parser.next(std.testing.allocator)) |token| {
         defer token.deinit();
-        print("parsed: {any}\n\n", .{token});
+        print("{s}\n", .{token.serialize()});
     }
 }

@@ -7,31 +7,39 @@ pub fn FixedQueue(comptime T: type, size: usize) type {
     return struct {
         const Self = @This();
         queue: [size]?T = .{null} ** size,
-        take_idx: usize = 0,
-        put_idx: usize = 0,
+        first_idx: usize = 0,
+        last_idx: usize = 0,
         len: usize = 0,
 
         pub fn take(self: *Self) ?T {
-            if (self.queue[self.take_idx]) |item| {
-                self.queue[self.take_idx] = null;
+            if (self.queue[self.first_idx]) |item| {
+                self.queue[self.first_idx] = null;
                 self.len -= 1;
-                const take_idx_incremented = if (self.take_idx == size - 1) 0 else self.take_idx + 1;
-                self.take_idx = take_idx_incremented;
+                const take_idx_incremented = if (self.first_idx == size - 1) 0 else self.first_idx + 1;
+                self.first_idx = take_idx_incremented;
                 return item;
             }
             return null;
         }
 
-        pub fn put(self: *Self, item: T) void {
-            if (self.queue[self.put_idx] != null) @panic("queue spot taken yo");
-            self.queue[self.put_idx] = item;
+        pub fn putFirst(self: *Self, item: T) void {
+            const new_first_idx = if (self.first_idx == 0) size - 1 else self.first_idx - 1;
+            if (self.queue[new_first_idx] != null) @panic("queue spot taken yo");
+            self.queue[new_first_idx] = item;
+            self.first_idx = new_first_idx;
             self.len += 1;
-            self.put_idx = if (self.put_idx == size - 1) 0 else self.put_idx + 1;
+        }
+
+        pub fn putLast(self: *Self, item: T) void {
+            if (self.queue[self.last_idx] != null) @panic("queue spot taken yo");
+            self.queue[self.last_idx] = item;
+            self.last_idx = if (self.last_idx == size - 1) 0 else self.last_idx + 1;
+            self.len += 1;
         }
 
         pub fn peek(self: Self, idx: usize) ?T {
             assert(idx < size);
-            var actual_idx = self.take_idx + idx;
+            var actual_idx = self.first_idx + idx;
             if (actual_idx >= size) actual_idx -= size;
             return self.queue[actual_idx];
         }
@@ -40,40 +48,40 @@ pub fn FixedQueue(comptime T: type, size: usize) type {
 
 test "fill until full and flush all" {
     var q = FixedQueue(u8, 3){};
-    q.put('a');
-    q.put('b');
-    q.put('c');
+    q.putLast('a');
+    q.putLast('b');
+    q.putLast('c');
     try expectEqual('a', q.take());
     try expectEqual('b', q.take());
     try expectEqual('c', q.take());
 }
 
-test "circular put and take" {
+test "circular putLast and take" {
     var q = FixedQueue(u8, 3){};
     try expectEqual(0, q.len);
-    q.put('a');
+    q.putLast('a');
     try expectEqual(1, q.len);
-    q.put('b');
+    q.putLast('b');
     try expectEqual(2, q.len);
     try expectEqual('a', q.take());
     try expectEqual(1, q.len);
-    q.put('c');
+    q.putLast('c');
     try expectEqual(2, q.len);
     try expectEqual('b', q.take());
     try expectEqual(1, q.len);
-    q.put('d');
+    q.putLast('d');
     try expectEqual(2, q.len);
     try expectEqual('c', q.take());
     try expectEqual(1, q.len);
-    q.put('e');
+    q.putLast('e');
     try expectEqual(2, q.len);
     try expectEqual('d', q.take());
     try expectEqual(1, q.len);
-    q.put('f');
+    q.putLast('f');
     try expectEqual(2, q.len);
     try expectEqual('e', q.take());
     try expectEqual(1, q.len);
-    q.put('g');
+    q.putLast('g');
     try expectEqual(2, q.len);
     try expectEqual('f', q.take());
     try expectEqual(1, q.len);
@@ -84,13 +92,13 @@ test "circular put and take" {
 test "peeking" {
     var q = FixedQueue(u8, 4){};
     try expectEqual(null, q.peek(0));
-    q.put('a');
+    q.putLast('a');
     try expectEqual('a', q.peek(0));
     _ = q.take();
     try expectEqual(null, q.peek(0));
-    q.put('b');
+    q.putLast('b');
     try expectEqual('b', q.peek(0));
-    q.put('c');
+    q.putLast('c');
     try expectEqual('b', q.peek(0));
     try expectEqual('c', q.peek(1));
 }

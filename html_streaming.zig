@@ -10,18 +10,20 @@ const toNewOwner = @import("./utils.zig").toNewOwner;
 
 const HtmlFromMdStream = struct {
     const Self = @This();
-    const HtmlQueue = FixedQueue(HtmlToken, 3);
+    const HtmlQueue = FixedQueue(HtmlToken, 10);
     const MdQueue = FixedQueue(MdToken, 3);
 
     md_token_stream: *MdTokenStream,
     context_stack: std.ArrayList(Context),
     html_queue: HtmlQueue = HtmlQueue{},
     md_queue: MdQueue = MdQueue{},
+    scratch_allocator: std.mem.Allocator,
 
-    pub fn init(md_token_stream: *MdTokenStream, allocator: std.mem.Allocator) !Self {
+    pub fn init(md_token_stream: *MdTokenStream, scratch_allocator: std.mem.Allocator) !Self {
         return .{
+            .scratch_allocator = scratch_allocator,
             .md_token_stream = md_token_stream,
-            .context_stack = std.ArrayList(Context).init(allocator),
+            .context_stack = std.ArrayList(Context).init(scratch_allocator),
         };
     }
 
@@ -29,7 +31,8 @@ const HtmlFromMdStream = struct {
         self.context_stack.deinit();
     }
 
-    pub fn next(self: *Self, allocator: std.mem.Allocator) !?HtmlToken {
+    /// ideally want to reset scratch-allocations at the start of this
+    pub fn next(self: *Self, content_allocator: std.mem.Allocator) !?HtmlToken {
         if (self.html_queue.take()) |html_token| return html_token;
 
         if (self.peekMdToken(0)) |md_token| {
@@ -41,11 +44,11 @@ const HtmlFromMdStream = struct {
 
             switch (context) {
                 .paragraph => {
-                    try self.parseParagraph(allocator);
+                    try self.parseParagraph(content_allocator);
                 },
                 .header1 => {
                     _ = self.md_queue.take();
-                    try self.parseHeader(allocator);
+                    try self.parseHeader(content_allocator);
                 },
             }
             return self.html_queue.take();
@@ -57,7 +60,7 @@ const HtmlFromMdStream = struct {
     fn peekMdToken(self: *Self, idx: usize) ?MdToken {
         while (self.md_queue.len <= idx) {
             const md_token = self.md_token_stream.next() orelse return null;
-            self.md_queue.put(md_token);
+            self.md_queue.putLast(md_token);
         }
         return self.md_queue.peek(idx);
     }
@@ -73,23 +76,38 @@ const HtmlFromMdStream = struct {
         return is_header_symbol and peek1 == .space;
     }
 
-    fn parseParagraph(self: *Self, allocator: std.mem.Allocator) !void {
-        var text_buffer = std.ArrayList(u8).init(allocator);
+    fn parseParagraph(self: *Self, content_allocator: std.mem.Allocator) !void {
+        var text_buffer = std.ArrayList(u8).init(content_allocator);
         defer text_buffer.deinit();
-        var add_linebreak = false;
 
-        parsing: while (self.nextMdToken()) |md_token| {
+        parsing: while (self.peekMdToken(0)) |md_token| {
             switch (md_token) {
-                .alphanumerical => |content| try text_buffer.appendSlice(content),
-                .symbol => @panic("time to handle symbols in paragraphs"),
+                .alphanumerical => |content| {
+                    _ = self.nextMdToken();
+                    try text_buffer.appendSlice(content);
+                },
+
+                .symbol => {
+                    var nested_sequence = std.ArrayList(HtmlToken).init(self.scratch_allocator);
+                    defer nested_sequence.deinit();
+                    var text_before = std.ArrayList(HtmlToken).init(self.scratch_allocator);
+                    defer text_before.deinit();
+
+                    try self.parseNested(content_allocator, &text_before, &nested_sequence);
+
+                    if (text_before) |text| try text_buffer.appendSlice(text);
+                    for (nested_sequence.items) |html_token| self.html_queue.putLast(html_token);
+                },
+
                 .space => |content| {
+                    _ = self.nextMdToken();
                     if (self.headerAfterParagraphPeeked()) break :parsing;
                     if (self.peekMdToken(0) == null) break :parsing;
                     const new_line_count = countItem(u8, content, '\n');
                     if (new_line_count > 1) break :parsing;
 
                     if (new_line_count == 1) {
-                        add_linebreak = true;
+                        self.html_queue.putLast(HtmlToken.line_break);
                         break :parsing;
                     }
 
@@ -99,13 +117,9 @@ const HtmlFromMdStream = struct {
             }
         }
 
-        self.html_queue.put(.{ .text_node = try toNewOwner(u8, allocator, &text_buffer) });
-        if (add_linebreak) {
-            self.html_queue.put(HtmlToken.line_break);
-            return;
-        }
+        self.html_queue.putFirst(.{ .text_node = try toNewOwner(u8, content_allocator, &text_buffer) });
         const context = self.context_stack.pop();
-        self.html_queue.put(context.endTag());
+        self.html_queue.putLast(context.endTag());
     }
 
     fn parseHeader(self: *Self, allocator: std.mem.Allocator) !void {
@@ -124,31 +138,60 @@ const HtmlFromMdStream = struct {
             }
         }
 
-        self.html_queue.put(.{ .text_node = try toNewOwner(u8, allocator, &text_buffer) });
+        self.html_queue.putLast(.{ .text_node = try toNewOwner(u8, allocator, &text_buffer) });
         const context = self.context_stack.pop();
-        self.html_queue.put(context.endTag());
+        self.html_queue.putLast(context.endTag());
+    }
+
+    /// meant to be used only by other parse methods
+    fn parseNested(
+        self: *Self,
+        content_allocator: std.mem.Allocator,
+        text_before: *std.ArrayList(u8),
+        sequence: *std.ArrayList(HtmlToken),
+    ) !?[]const u8 {
+        _ = content_allocator;
+
+        while (self.nextMdToken()) |md_token| {
+            switch (md_token) {
+                .alphanumerical => {},
+                .space => {
+                    if (text_before.len > 0) try sequence.append(' ');
+                },
+                .symbol => {},
+            }
+        }
+        return text_before;
+        // while (self.nextMdToken()) |md_token| {
+        //     switch (md_token) {
+        //         .alphanumerical => {
+        //         },
+        //         .symbol => {
+        //         },
+        //         .space => {
+        //         },
+        //     }
+        // }
     }
 };
 
 const Context = union(ContextTag) {
     const Self = @This();
+    const paragraph = HtmlTagPair{ .start_tag = .paragraph_start, .end_tag = .paragraph_end };
+    const header1 = HtmlTagPair{ .start_tag = .header1_start, .end_tag = .header1_end };
+
     paragraph: HtmlTagPair,
     header1: HtmlTagPair,
 
     pub fn from(md_token: MdToken) Self {
         switch (md_token) {
-            .alphanumerical => return Self{ .paragraph = HtmlTagPair{
-                .start_tag = HtmlToken.paragraph_start,
-                .end_tag = HtmlToken.paragraph_end,
-            } },
+            .alphanumerical => return Self{ .paragraph = paragraph },
             .symbol => |content| {
                 switch (countItem(u8, content, '#')) {
-                    1 => return Self{ .header1 = HtmlTagPair{
-                        .start_tag = HtmlToken.header1_start,
-                        .end_tag = HtmlToken.header1_end,
-                    } },
-                    else => unreachable,
+                    1 => return Self{ .header1 = header1 },
+                    else => {},
                 }
+                return Self{ .paragraph = paragraph };
             },
             else => unreachable,
         }
@@ -227,7 +270,7 @@ test "test two next calls for one paragraph" {
         MdToken{ .space = " " },
         MdToken{ .alphanumerical = "desu" },
         MdToken{ .space = " " },
-        // MdToken{ .symbol = "**`" },
+        MdToken{ .symbol = "**`" },
         // MdToken{ .alphanumerical = "kawaiii" },
         // MdToken{ .symbol = "`**_" },
         // MdToken{ .space = "\n\n" },

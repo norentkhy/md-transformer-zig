@@ -16,20 +16,25 @@ test "hello world" {
     var markdown_content = std.ArrayList(u8).init(std.testing.allocator);
     defer markdown_content.deinit();
     try markdown_content.appendSlice(
-        \\hello world
-        \\# headers be heading
+        \\Hello world!
+        \\
+        \\# Headers be heading, right?
+        \\
+        \\**This side-quest** has main-quest potential.
     );
     var html_stream = HtmlStream.new(std.testing.allocator, CharStream.new(markdown_content));
 
     var n: usize = 0;
     while (try html_stream.next(std.testing.allocator)) |html_token| {
         defer html_token.deinit();
-        if (8 < n) break;
+        if (12 < n) break;
         defer n += 1;
 
-        try output.appendSlice(html_token.serialize());
+        const html_string = html_token.serialize();
+        try output.appendSlice(html_string);
+        if (html_token.kind() == .close) try output.append('\n');
     }
-    print("\n\n---HTML-OUTPUT---\n\n{s}\n\n", .{output.items});
+    print("\n\n" ++ "-HTML-OUTPUT" ++ "-" ** 68 ++ "\n\n{s}\n" ++ "-" ** 80 ++ "\n", .{output.items});
 }
 
 const CharStream = struct {
@@ -111,7 +116,7 @@ const HtmlStream = struct {
     ///
     fn parseParagraph(self: *Self, output_allocator: std.mem.Allocator) !void {
         std.debug.assert(self.html_queue.len == 0);
-        std.debug.assert(self.block_context != null);
+        std.debug.assert(self.block_context.? == .p);
 
         var text = std.ArrayList(u8).init(output_allocator);
         defer text.deinit();
@@ -129,6 +134,7 @@ const HtmlStream = struct {
                 if (0 < text.items.len) add_space = true;
             },
             '\n' => {
+                if (text.items.len == 0) continue;
                 const remainder = self.md_stream.peekRemainder() orelse {
                     try self.html_queue.put(.last, try HtmlToken.text(output_allocator, &text));
                     try self.html_queue.put(.last, self.popBlockContextCloseTag());
@@ -153,7 +159,9 @@ const HtmlStream = struct {
                     },
                 };
             },
-            else => {},
+            else => {
+                try text.append(char);
+            },
         };
 
         try self.html_queue.put(.last, try HtmlToken.text(output_allocator, &text));
@@ -162,7 +170,12 @@ const HtmlStream = struct {
 
     fn parseHeader(self: *Self, output_allocator: std.mem.Allocator) !void {
         std.debug.assert(self.html_queue.len == 0);
-        std.debug.assert(self.block_context != null);
+        std.debug.assert(correct_block_context: {
+            break :correct_block_context switch (self.block_context.?) {
+                .h1, .h2, .h3, .h4, .h5, .h6 => true,
+                else => false,
+            };
+        });
 
         var text = std.ArrayList(u8).init(output_allocator);
         defer text.deinit();
@@ -444,6 +457,13 @@ const HtmlToken = union(HtmlTokenTag) {
             .code_ => "<code>",
             ._code => "</code>",
         };
+    }
+
+    fn kind(self: Self) enum { open, close, solo } {
+        const tagName = @tagName(self);
+        if (tagName[tagName.len - 1] == '_') return .open;
+        if (tagName[0] == '_') return .close;
+        return .solo;
     }
 };
 

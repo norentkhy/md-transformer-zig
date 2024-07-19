@@ -104,6 +104,8 @@ const HtmlStream = struct {
     }
 
     fn nextNoContext(self: *Self) ?HtmlToken {
+        self.skipSpaceCharacters();
+
         const remaining_slice = self.md_stream.peekRemainder() orelse return null;
         const block_context = BlockContext.from(remaining_slice) orelse return null;
 
@@ -113,59 +115,44 @@ const HtmlStream = struct {
         return block_context.tag(.open);
     }
 
-    ///
     fn parseParagraph(self: *Self, output_allocator: std.mem.Allocator) !void {
         std.debug.assert(self.html_queue.len == 0);
         std.debug.assert(self.block_context.? == .p);
 
-        var text = std.ArrayList(u8).init(output_allocator);
-        defer text.deinit();
+        try self.parseInlineText(output_allocator);
 
-        var add_space = false;
-        while (self.md_stream.next()) |char| switch (char) {
-            'a'...'z', 'A'...'Z', '0'...'9' => {
-                if (add_space) {
-                    add_space = false;
-                    try text.append(' ');
-                }
-                try text.append(char);
-            },
-            ' ', '\t' => {
-                if (0 < text.items.len) add_space = true;
-            },
-            '\n' => {
-                if (text.items.len == 0) continue;
-                const remainder = self.md_stream.peekRemainder() orelse {
-                    try self.html_queue.put(.last, try HtmlToken.text(output_allocator, &text));
-                    try self.html_queue.put(.last, self.popBlockContextCloseTag());
-                    return;
-                };
-                for (remainder) |c| switch (c) {
-                    '\n' => {
-                        try self.html_queue.put(.last, try HtmlToken.text(output_allocator, &text));
-                        try self.html_queue.put(.last, self.popBlockContextCloseTag());
-                        return;
-                    },
-                    ' ', '\t' => {},
-                    '#' => {
-                        try self.html_queue.put(.last, try HtmlToken.text(output_allocator, &text));
-                        try self.html_queue.put(.last, self.popBlockContextCloseTag());
-                        return;
-                    },
-                    else => {
-                        try self.html_queue.put(.last, try HtmlToken.text(output_allocator, &text));
-                        try self.html_queue.put(.last, .br);
-                        return;
-                    },
-                };
-            },
-            else => {
-                try text.append(char);
-            },
+        try self.html_queue.put(.last, tag: {
+            const remainder = self.md_stream.peekRemainder() orelse break :tag self.popBlockContextCloseTag();
+
+            if (remainder[0] == '\n' or HtmlToken.startsWithHeader(remainder))
+                break :tag self.popBlockContextCloseTag();
+
+            break :tag .br;
+        });
+    }
+
+    fn skipSpaceCharacters(self: *Self) void {
+        while (self.md_stream.peek()) |char| switch (char) {
+            ' ', '\t', '\n' => _ = self.md_stream.next(),
+            else => break,
         };
+    }
+
+    fn parseInlineText(self: *Self, output_allocator: std.mem.Allocator) !void {
+        std.debug.assert(self.html_queue.len == 0);
+        std.debug.assert(self.block_context != null);
+
+        self.skipSpaceCharacters();
+
+        var text = std.ArrayList(u8).init(output_allocator);
+        text.deinit();
+
+        while (self.md_stream.next()) |char| {
+            if (char == '\n') break;
+            try text.append(char);
+        }
 
         try self.html_queue.put(.last, try HtmlToken.text(output_allocator, &text));
-        try self.html_queue.put(.last, self.popBlockContextCloseTag());
     }
 
     fn parseHeader(self: *Self, output_allocator: std.mem.Allocator) !void {
@@ -177,35 +164,7 @@ const HtmlStream = struct {
             };
         });
 
-        var text = std.ArrayList(u8).init(output_allocator);
-        defer text.deinit();
-
-        var add_space = false;
-        while (self.md_stream.next()) |char| switch (char) {
-            'a'...'z', 'A'...'Z', '0'...'9' => {
-                if (add_space) {
-                    add_space = false;
-                    try text.append(' ');
-                }
-                try text.append(char);
-            },
-            ' ', '\t' => {
-                if (0 < text.items.len) add_space = true;
-            },
-            '\n' => {
-                try self.html_queue.put(.last, try HtmlToken.text(output_allocator, &text));
-                try self.html_queue.put(.last, self.popBlockContextCloseTag());
-                return;
-            },
-            else => {
-                if (add_space) {
-                    add_space = false;
-                    try text.append(' ');
-                }
-                try text.append(char);
-            },
-        };
-        try self.html_queue.put(.last, try HtmlToken.text(output_allocator, &text));
+        try self.parseInlineText(output_allocator);
         try self.html_queue.put(.last, self.popBlockContextCloseTag());
     }
 
@@ -464,6 +423,22 @@ const HtmlToken = union(HtmlTokenTag) {
         if (tagName[tagName.len - 1] == '_') return .open;
         if (tagName[0] == '_') return .close;
         return .solo;
+    }
+
+    fn startsWithHeader(string: []const u8) bool {
+        var count: u3 = 0; // maximum count is 7, because h6 is highest header number
+        for (string) |char| switch (char) {
+            ' ', '\t' => {
+                if (count == 0) continue;
+                return true;
+            },
+            '#' => {
+                count += 1;
+                if (count > 6) return false;
+            },
+            else => return false,
+        };
+        return false;
     }
 };
 
